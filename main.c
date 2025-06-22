@@ -13,6 +13,7 @@ void ParseArgument(int argc, wchar_t* argv[])
 
 	if (argc < 2)									wprintf(L"Insufficient arguments.\n");
 	else if (!wcscmp(word, L"delete") && argc == 3)	RecycleFile(file, NULL);
+
 	else if (!wcscmp(word, L"restore") && argc == 4)
 	{
 		if (!wcscmp(option, L"guid"))		RestoreFile(findfile, FIND_TYPE_GUID);
@@ -35,7 +36,7 @@ void ParseArgument(int argc, wchar_t* argv[])
 int wmain(int argc, wchar_t* argv[])
 {
 	// Initialize the recycle bin related resources
-	ASSERT(InitRecycleBin(), L"InitRecycleBin - x");
+	ASSERT_NORET(InitRecycleBin(), L"InitRecycleBin - x");
 
 	// Parse the argument and do some actions
 	ParseArgument(argc, argv);

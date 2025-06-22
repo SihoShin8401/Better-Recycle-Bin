@@ -1,5 +1,8 @@
 #include <stdio.h>
 #include <objbase.h>
+#include <shlwapi.h>
+
+#pragma comment (lib, "Shlwapi.lib")
 
 #include "assert.h"
 #include "bin.h"
@@ -91,7 +94,8 @@ CloseRecycleBin(
 )
 {
 	// Close the handle for the open record file
-	CloseHandle(hRecordFileWrite);
+	if (hRecordFileWrite != INVALID_HANDLE_VALUE)
+		CloseHandle(hRecordFileWrite);
 }
 
 BOOL
@@ -267,14 +271,205 @@ RecycleFile(
 	wprintf(INFO_PREFIX L"%s is in the recycle bin as %s\n", szFilePath, szGuid);
 }
 
-VOID
+INT
+PickCandidate(
+	PRECORD_ENTRY	pRecordEntry,
+	INT				iSize
+)
+{
+	INT		i;
+	INT		iUserResponse;
+
+	wprintf(L"%5s | %-38s | %-10s | %s\n", L"Index", L"GUID", L"Date", L"Original Path");
+	for (i = 0; i < iSize; i++)
+	{
+		wprintf(L"%5d | %s | %04d-%02d-%02d | %s\n",
+			i, pRecordEntry[i].szGUID, pRecordEntry[i].stDeletion.wYear,
+			pRecordEntry[i].stDeletion.wMonth, pRecordEntry[i].stDeletion.wDay,
+			pRecordEntry[i].szOriginalPath
+		);
+	}
+	wprintf(L"What is your file? (%d if none): ", INVALID_CANDIDATE);
+	wscanf_s(L"%d", &iUserResponse);
+
+	if (iUserResponse >= 0 && iUserResponse < iSize)
+		return iUserResponse;
+	return INVALID_CANDIDATE;
+}
+
+BOOL
 FindFile(
 	LPWSTR		szFind,
 	DWORD		dwType,
 	FIND_ACTION	fnFindAction
 )
 {
+	HANDLE	hRecordFileRead;
+	DWORD	dwReadCount;
+	SIZE_T	dwFindLen;
 
+	RECORD_ENTRY	re;
+	RECORD_ENTRY	reCandidates[CANDIDATES];
+
+	INT		i;
+	INT		iCandidate;
+
+	LPWSTR	szFindFileName;
+
+	// Get the szFind length in variable
+	dwFindLen = wcslen(szFind);
+
+	// Open the log file
+	hRecordFileRead = CreateFileW(
+		szRecordFilePath, GENERIC_READ | GENERIC_WRITE,
+		FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+		FILE_ATTRIBUTE_HIDDEN, NULL);
+	ASSERT_VAL(hRecordFileRead,
+		INVALID_HANDLE_VALUE,
+		L"FindFile - CreateFileW");
+
+	// Initialize the variables for the loop
+	i = 0;
+	iCandidate = -1;
+
+	// Read the logs
+	do 
+	{
+		ASSERT(
+			ReadFile(hRecordFileRead, &re, sizeof(re), &dwReadCount, NULL),
+			L"FindFile - ReadFile"
+		);
+		if (dwReadCount <= 0)
+			break;
+
+		if (!re.bIsValid)
+			continue;
+
+		// If search type is GUID,
+		// check if portion of szFind matches re.szGUID
+		if (dwType == FIND_TYPE_GUID
+			&& !wcsncmp(re.szGUID + 1, szFind, dwFindLen))
+		{
+			// Add the entry to the candidate array
+			reCandidates[i] = re;
+			i++;
+
+			// If the array is full,
+			if (i >= CANDIDATES)
+			{
+				// Pick the candidate by interacting with the user
+				iCandidate = PickCandidate(reCandidates, i);
+				if (iCandidate == INVALID_CANDIDATE)
+				{
+					i = 0;
+					continue;
+				}
+				else
+					goto end;
+			}
+		}
+		else if (dwType == FIND_TYPE_ORIG_NAME)
+		{
+			// Extract file from global path
+			szFindFileName = PathFindFileNameW(re.szOriginalPath);
+
+			if (!wcsncmp(szFindFileName, szFind, dwFindLen))
+			{
+				// Add the entry to the candidate array
+				reCandidates[i] = re;
+				i++;
+
+				// If the array is full,
+				if (i >= CANDIDATES)
+				{
+					// Pick the candidate by interacting with the user
+					iCandidate = PickCandidate(reCandidates, i);
+					if (iCandidate == INVALID_CANDIDATE)
+					{
+						i = 0;
+						continue;
+					}
+					else
+						goto end;
+				}
+			}
+		}
+	} while (dwReadCount > 0);
+
+	// Pick the candidate by interacting with the user
+	iCandidate = PickCandidate(reCandidates, i);
+	if (iCandidate == INVALID_CANDIDATE)
+	{
+		CloseHandle(hRecordFileRead);
+		return FALSE;
+	}
+
+end:
+	CloseHandle(hRecordFileRead);
+	DEBUG(L"User's choice", reCandidates[iCandidate].szOriginalPath);
+	return fnFindAction(
+		reCandidates[iCandidate].szGuidPath,
+		reCandidates[iCandidate].szOriginalPath
+	);
+}
+
+BOOL
+RemoveRecycleBinEntry(
+	LPWSTR	szGlobalPath
+)
+{
+	HANDLE	hRecordFileRead;
+	DWORD	dwReadCount;
+	RECORD_ENTRY	re;
+
+	// Open the log file for read/write
+	hRecordFileRead = CreateFileW(
+		szRecordFilePath, GENERIC_READ | GENERIC_WRITE,
+		FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+		FILE_ATTRIBUTE_HIDDEN, NULL
+	);
+	ASSERT_VAL(
+		hRecordFileRead,
+		INVALID_HANDLE_VALUE,
+		L"RemoveRecycleBinEntry - CreateFileW"
+	);
+
+	do
+	{
+		ASSERT(
+			ReadFile(hRecordFileRead, &re, sizeof(re), &dwReadCount, NULL),
+			L"RemoveRecycleBinEntry - ReadFile"
+		);
+		if (dwReadCount <= 0)
+			break;
+
+		// Check if szGlobalPath matches with entries
+		if (!wcscmp(szGlobalPath, re.szOriginalPath))
+		{
+			// Set the file pointer back -sizeof(re)
+			ASSERT_VAL(
+				SetFilePointer(
+					hRecordFileRead,
+					-((int)sizeof(re)),
+					NULL, FILE_CURRENT),
+				INVALID_SET_FILE_POINTER,
+				L"RemoveRecycleBinEntry - SetFilePointer"
+			);
+
+			// write the new entry
+			RtlFillMemory(&re, sizeof(re), 0);
+			re.bIsValid = 0;
+			ASSERT(
+				WriteFile(hRecordFileRead, &re, sizeof(re), NULL, NULL),
+				L"RemoveRecycleBinEntry - WriteFile"
+			);
+
+			// Yay
+			return TRUE;
+		}
+	} while (dwReadCount > 0);
+
+	return FALSE;
 }
 
 BOOL
@@ -283,7 +478,45 @@ RestoreAction(
 	LPWSTR	szOrigPath
 )
 {
-	return CopyFileAndDirectory(szGuidPath, szOrigPath)
+	wchar_t*	tok;
+	wchar_t*	next = NULL;
+	WCHAR		szGlobalPath[MAX_PATH] = { 0, };
+	DWORD		dwError;
+
+	// Create the directories when needed
+	tok = wcstok_s(szOrigPath, L"\\", &next);
+	wcscat_s(szGlobalPath, MAX_PATH, tok);
+	do
+	{
+		// Check for directories' absence
+		if (GetFileAttributesW(szGlobalPath) == INVALID_FILE_ATTRIBUTES)
+		{
+			dwError = GetLastError();
+			ASSERT_IGNORE_ERROR(
+				dwError,
+				ERROR_FILE_NOT_FOUND,
+				L"RestoreAction - GetFileAttributesW"
+			);
+			ASSERT_IGNORE_ERROR(
+				CreateDirectoryW(szGlobalPath, NULL),
+				ERROR_ALREADY_EXISTS,
+				L"RestoreAction - CreateDirectoryW"
+			);
+		}
+
+		// Get the token
+		tok = wcstok_s(NULL, L"\\", &next);
+
+		// Concatenate the directory to the end
+		// of the global path
+		swprintf(szGlobalPath, MAX_PATH, L"%s\\%s", szGlobalPath, tok);
+
+		// If next token is empty, then break
+		// because 'tok' is file's name in this case
+	} while (tok && next && next[0] != '\0');
+
+	return RemoveRecycleBinEntry(szGlobalPath)
+		&& CopyFileAndDirectory(szGuidPath, szGlobalPath)
 		&& DeleteFileAndDirectory(szGuidPath);
 }
 
@@ -293,7 +526,8 @@ PurgeAction(
 	LPWSTR	szOrigPath
 )
 {
-	return DeleteFileAndDirectory(szGuidPath);
+	return RemoveRecycleBinEntry(szOrigPath)
+		&& DeleteFileAndDirectory(szGuidPath);
 }
 
 VOID
@@ -302,7 +536,10 @@ RestoreFile(
 	DWORD	dwType
 )
 {
-
+	// Oh... I hate this code
+	CloseHandle(hRecordFileWrite);
+	hRecordFileWrite = INVALID_HANDLE_VALUE;
+	FindFile(szFind, dwType, RestoreAction);
 }
 
 VOID
@@ -311,7 +548,10 @@ PurgeFile(
 	DWORD	dwType
 )
 {
-
+	// This as well...
+	CloseHandle(hRecordFileWrite);
+	hRecordFileWrite = INVALID_HANDLE_VALUE;
+	FindFile(szFind, dwType, PurgeAction);
 }
 
 VOID

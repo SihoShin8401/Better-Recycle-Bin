@@ -8,6 +8,8 @@
 #define FIND_TYPE_ORIG_NAME	1
 
 #define GUID_LEN	40
+#define CANDIDATES	10
+#define INVALID_CANDIDATE	-1
 
 typedef struct
 {
