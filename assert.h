@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <Windows.h>
 
-#define __DEBUG__
+//#define __DEBUG__
 
 #define ERROR_PREFIX	L"[!] "
 #define DEBUG_PREFIX	L"[D] "

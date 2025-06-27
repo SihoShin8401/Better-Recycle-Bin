@@ -307,6 +307,7 @@ FindFile(
 	HANDLE	hRecordFileRead;
 	DWORD	dwReadCount;
 	SIZE_T	dwFindLen;
+	WCHAR	szOnlyGuid;
 
 	RECORD_ENTRY	re;
 	RECORD_ENTRY	reCandidates[CANDIDATES];
@@ -318,6 +319,9 @@ FindFile(
 
 	// Get the szFind length in variable
 	dwFindLen = wcslen(szFind);
+
+	// Separate only the GUID
+	szOnlyGuid = PathFindFileNameW(szFind);
 
 	// Open the log file
 	hRecordFileRead = CreateFileW(
@@ -348,7 +352,7 @@ FindFile(
 		// If search type is GUID,
 		// check if portion of szFind matches re.szGUID
 		if (dwType == FIND_TYPE_GUID
-			&& !wcsncmp(re.szGUID + 1, szFind, dwFindLen))
+			&& !wcsncmp(re.szGUID, szOnlyGuid, dwFindLen))
 		{
 			// Add the entry to the candidate array
 			reCandidates[i] = re;

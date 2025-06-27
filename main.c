@@ -44,5 +44,8 @@ int wmain(int argc, wchar_t* argv[])
 	// Clean up the resources
 	CloseRecycleBin();
 
+	// Wait
+	_wsystem(L"pause");
+
 	return 0;
 }
